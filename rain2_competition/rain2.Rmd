@@ -1,0 +1,464 @@
+---
+title: "solution script for the kaggle competition : rain2"
+output: html_document
+---
+
+
+<br />
+First download the data sets from the kaggle webpage https://www.kaggle.com/c/how-much-did-it-rain-ii/data, then upload both train and test,
+
+```{r, eval = FALSE}
+train <- read.csv("train.csv")
+test <- read.csv("test.csv")
+```
+<br />
+
+Summarize the Ref variable and remove the rows where Ref equals NA ( 1.0 means that all Ref-values of the same Id are NA's ),
+``` {r, eval = FALSE}
+library(parallel)
+library(dplyr)
+
+isNA <- train %>% group_by(Id) %>% summarise(TotalNA = sum(is.na(Ref))/length(Ref))
+
+remov_ids = filter(isNA, TotalNA == 1.0)                                                     
+
+newdf = filter(train, !Id %in% as.vector(data.frame(remov_ids[, 1])[, 1]))
+```
+<br />
+
+####Create features for both train and test####
+<br />
+
+**minutes past**
+
+Here convert negative values to NA's (negatives are created by the intersection of id's with the lag variable)
+
+``` {r, eval = FALSE}
+
+# TRAIN  
+newdf$lag_time = lag(newdf$minutes_past) 
+newdf = mutate(newdf, time_dif = minutes_past - lag_time)
+newdf$lag_time = NULL
+newdf$time_dif[newdf$time_dif < 0] = NA                   
+
+# TEST
+test$lag_time = lag(test$minutes_past) 
+test = mutate(test, time_dif = minutes_past - lag_time)
+test$lag_time = NULL
+test$time_dif[test$time_dif < 0] = NA 
+```
+<br />
+
+**"RhoHV"**
+
+The co-polar correlation function, RhoHV, is a data type produced by how well the magnitude and phase measurements between the horizontal
+and vertical channels are matched, or correlated. It is a value normalized between 0 and 1. Perfect correlation of the two channels 
+would have a value of 1 and perfect de-correlation a value of 0.
+
+
+``` {r, eval = FALSE}
+# TRAIN
+newdf$RhoHV[newdf$RhoHV < 0] = 0
+newdf$RhoHV[newdf$RhoHV > 1] = 1
+newdf$RhoHV_5x5_10th[newdf$RhoHV_5x5_10th < 0] = 0 ; newdf$RhoHV_5x5_10th[newdf$RhoHV_5x5_10th > 1] = 1
+newdf$RhoHV_5x5_50th[newdf$RhoHV_5x5_50th < 0] = 0 ; newdf$RhoHV_5x5_50th[newdf$RhoHV_5x5_50th > 1] = 1
+newdf$RhoHV_5x5_90th[newdf$RhoHV_5x5_90th < 0] = 0 ; newdf$RhoHV_5x5_90th[newdf$RhoHV_5x5_90th > 1] = 1
+
+# TEST
+test$RhoHV[test$RhoHV < 0] = 0
+test$RhoHV[test$RhoHV > 1] = 1
+test$RhoHV_5x5_10th[test$RhoHV_5x5_10th < 0] = 0 ; test$RhoHV_5x5_10th[test$RhoHV_5x5_10th > 1] = 1
+test$RhoHV_5x5_50th[test$RhoHV_5x5_50th < 0] = 0 ; test$RhoHV_5x5_50th[test$RhoHV_5x5_50th > 1] = 1
+test$RhoHV_5x5_90th[test$RhoHV_5x5_90th < 0] = 0 ; test$RhoHV_5x5_90th[test$RhoHV_5x5_90th > 1] = 1
+```
+<br />
+
+**A measure of the correlation of the horizontal and vertical back scattered power within a radar sample volume**
+
+* 0.96 to 1        : Small diversity in hydrometeors within the sample volume  
+* 0.85 to 0.95     : Large diversity in hydrometeors                          
+* less than 0.85   : Non-hydrometeorological targets                          
+
+``` {r, eval = FALSE}
+rh5_FUNC = function(x) {
+  
+  if (is.na(x)) {
+    y = -1 }                             # "NON_hydrometeors"
+  else if (x >= 0.96 & x <= 1) { 
+    y = 0 }                              # "SMALL_diversity"
+  else if (x >= 0.85 & x <= 0.95) { 
+    y = 1 }                              # "LARGE_diversity"
+  else { 
+    y = -1 }                             # "NON_hydrometeors"
+  
+  return(y)
+}
+
+# TRAIN
+newdf = transform(newdf, rhohv_divers = vapply(RhoHV, rh5_FUNC, FUN.VALUE = numeric(1)))
+newdf = transform(newdf, rhohv_divers_10th = vapply(RhoHV_5x5_10th, rh5_FUNC, FUN.VALUE = numeric(1)))
+newdf = transform(newdf, rhohv_divers_50th = vapply(RhoHV_5x5_50th, rh5_FUNC, FUN.VALUE = numeric(1)))
+newdf = transform(newdf, rhohv_divers_90th = vapply(RhoHV_5x5_90th, rh5_FUNC, FUN.VALUE = numeric(1)))
+
+# TEST
+test = transform(test, rhohv_divers = vapply(RhoHV, rh5_FUNC, FUN.VALUE = numeric(1)))
+test = transform(test, rhohv_divers_10th = vapply(RhoHV_5x5_10th, rh5_FUNC, FUN.VALUE = numeric(1)))
+test = transform(test, rhohv_divers_50th = vapply(RhoHV_5x5_50th, rh5_FUNC, FUN.VALUE = numeric(1)))
+test = transform(test, rhohv_divers_90th = vapply(RhoHV_5x5_90th, rh5_FUNC, FUN.VALUE = numeric(1)))
+```
+
+<br />
+
+**"Zdr"**
+
+The Differential Reflectivity (ZDR) product shows the difference in returned energy between the horizontal and vertical pulses 
+of the radar. Differential Reflectivity is defined as the difference between the horizontal and vertical reflectivity factors in dBZ units. 
+Its values can range from -7.9 to +7.9 in units of decibels (dB). Positive values indicate that the targets are larger horizontally than they 
+are vertically, while negative values indicate that the targets are larger vertically than they are horizontally. Values near zero suggest that 
+the target is spherical, with the horizontal and vertical size being nearly the same.
+
+``` {r, eval = FALSE}
+zdr_FUNC = function(x) {
+  
+  if (is.na(x)) {
+    y = -1 }                             
+  else if (x >= -0.5 & x <= 0.5) { 
+    y = 0 }                              
+  else if (x < -0.5) { 
+    y = 1 }                              
+  else { 
+    y = 2 }                             
+  
+  return(y)
+}
+
+# TRAIN
+newdf = transform(newdf, zdr_divers = vapply(Zdr, zdr_FUNC, FUN.VALUE = numeric(1)))
+newdf = transform(newdf, zdr_divers_10th = vapply(Zdr_5x5_10th, zdr_FUNC, FUN.VALUE = numeric(1)))
+newdf = transform(newdf, zdr_divers_50th = vapply(Zdr_5x5_50th, zdr_FUNC, FUN.VALUE = numeric(1)))
+newdf = transform(newdf, zdr_divers_90th = vapply(Zdr_5x5_90th, zdr_FUNC, FUN.VALUE = numeric(1)))
+
+# TEST
+test = transform(test, zdr_divers = vapply(Zdr, zdr_FUNC, FUN.VALUE = numeric(1)))
+test = transform(test, zdr_divers_10th = vapply(Zdr_5x5_10th, zdr_FUNC, FUN.VALUE = numeric(1)))
+test = transform(test, zdr_divers_50th = vapply(Zdr_5x5_50th, zdr_FUNC, FUN.VALUE = numeric(1)))
+test = transform(test, zdr_divers_90th = vapply(Zdr_5x5_90th, zdr_FUNC, FUN.VALUE = numeric(1)))
+```
+<br />
+
+**Kdp** (degrees per kilometer OR specific differential phase)
+
+``` {r, eval = FALSE}
+kdp_FUNC = function(x) {
+  
+  if (is.na(x)) {
+    y = -1 }                             
+  else if (x < -2  | x > 7) { 
+    y = - 1 }                              
+  else if (x >= -2 & x <= 0) { 
+    y = 1 } 
+  else if (x > 0 & x <= 1) { 
+    y = 2 }
+  else if (x > 1 & x <= 2) { 
+    y = 3 }  
+  else { 
+    y = 4 }                             
+  
+  return(y)
+}
+
+# TRAIN
+newdf = transform(newdf, kdp_divers = vapply(Kdp, kdp_FUNC, FUN.VALUE = numeric(1)))
+newdf = transform(newdf, kdp_divers_10th = vapply(Kdp_5x5_10th, kdp_FUNC, FUN.VALUE = numeric(1)))
+newdf = transform(newdf, kdp_divers_50th = vapply(Kdp_5x5_50th, kdp_FUNC, FUN.VALUE = numeric(1)))
+newdf = transform(newdf, kdp_divers_90th = vapply(Kdp_5x5_90th, kdp_FUNC, FUN.VALUE = numeric(1)))
+
+# TEST
+test = transform(test, kdp_divers = vapply(Kdp, kdp_FUNC, FUN.VALUE = numeric(1)))
+test = transform(test, kdp_divers_10th = vapply(Kdp_5x5_10th, kdp_FUNC, FUN.VALUE = numeric(1)))
+test = transform(test, kdp_divers_50th = vapply(Kdp_5x5_50th, kdp_FUNC, FUN.VALUE = numeric(1)))
+test = transform(test, kdp_divers_90th = vapply(Kdp_5x5_90th, kdp_FUNC, FUN.VALUE = numeric(1)))
+```
+<br />
+
+**create dummy variables for divers-ity columns** (those columns that begin with 'divers..')
+``` {r, eval = FALSE}
+
+vars = colnames(newdf[which(unlist(lapply(strsplit(colnames(newdf), '_', fixed = TRUE, perl = FALSE), function(x) 'divers' %in% x)))])
+
+
+# TRAIN
+modmat = newdf[, vars]
+
+for (i in 1:dim(modmat)[2]) {
+  
+  modmat[, i] = as.factor(modmat[, i])                      # convert to factor
+}
+
+modmat = data.frame(model.matrix(~.-1, data = modmat))      # create model.matrix
+newdf = cbind(newdf, modmat)
+
+
+# TEST
+modmat_test = test[, vars]
+
+for (i in 1:dim(modmat_test)[2]) {
+  
+  modmat_test[, i] = as.factor(modmat_test[, i])
+}
+
+modmat_test = data.frame(model.matrix(~.-1, data = modmat_test))
+test = cbind(test, modmat_test)
+```
+<br />
+
+**function for calculating the time differences between each measure** (kaggle forum)
+``` {r, eval = FALSE}
+
+time_difference <- function(times, num_per_segment = 60) {
+  n <- length(times)
+  valid_time <- vector(mode = "numeric", length = n)
+  valid_time[1] <- times[1]
+  valid_time[-1] <- diff(times, 1)
+  valid_time[n] <- valid_time[n] + num_per_segment - sum(valid_time)
+  valid_time <- valid_time / num_per_segment
+  valid_time
+}
+```
+<br />
+
+**use different factors and powers for the rain-rates** (Convert reflectivity (dbz) to mm/hr)
+<br />
+<br />
+Sources:
+<br />
+http://wx.db.erau.edu/faculty/mullerb/Wx365/Radar_equation/mp_rainrate_derivation.pdf
+http://wx.db.erau.edu/faculty/mullerb/Wx365/Radar_equation/radar_equation.pdf
+``` {r, eval = FALSE}
+f = c(0.03646*10, 0.1944194*10, 0.11547*10, 0.0877*10, 0.017007*10, 0.01*10)
+p = c(0.0625, 0.04, 0.05, 0.05, 0.07142857, 0.08333333)
+
+
+marshall_palmer = function(dbz, factor, power) {
+  
+  out = factor ^ (power * dbz)
+  out
+}
+
+# extract columns to apply the marshall_palmer function
+col_dbz = grep("^Ref|Zdr", colnames(newdf), perl = TRUE, value = TRUE)
+
+
+# get the average rain-rate from ref-zdr columns for different coefficients of the marshall_palmer function
+
+# TRAIN
+newdf$time_difference = time_difference(newdf$minutes_past)
+df_dbz = newdf[, col_dbz]
+dbz_out = mclapply(1:length(f), function(x) rowMeans(data.frame(do.call(cbind, lapply(1:dim(df_dbz)[2], function(y) marshall_palmer(df_dbz[, y], f[x], p[x]))))), mc.cores = 2)
+dbz_out1 = data.frame(do.call(cbind, dbz_out))
+colnames(dbz_out1) = paste0('rain_rates_marspalm_', 1:dim(dbz_out1)[2])
+newdf = cbind(newdf, dbz_out1)
+
+# TEST
+test$time_difference = time_difference(test$minutes_past)
+df_test_dbz = test[, col_dbz]
+dbz_out_test = mclapply(1:length(f), function(x) rowMeans(data.frame(do.call(cbind, lapply(1:dim(df_test_dbz)[2], function(y) marshall_palmer(df_test_dbz[, y], f[x], p[x]))))), mc.cores = 2)
+dbz_out_test1 = data.frame(do.call(cbind, dbz_out_test))
+colnames(dbz_out_test1) = paste0('rain_rates_marspalm_', 1:dim(dbz_out_test1)[2])
+test = cbind(test, dbz_out_test1)
+```
+<br />
+
+**number of counts of radar-scans**
+``` {r, eval = FALSE}
+# TRAIN
+vec_train = as.vector(table(newdf$Id))
+
+# TEST
+vec_test = as.vector(table(test$Id))
+```
+<br />
+
+**count NA's of each row**
+``` {r, eval = FALSE}
+# TRAIN
+endf = newdf %>% group_by(Id) %>% summarise_each(funs(mean(., na.rm = TRUE)))
+isna = rowSums(is.na(endf))
+
+# TEST
+endf_test = test %>% group_by(Id) %>% summarise_each(funs(mean(., na.rm = TRUE)))
+isna_test = rowSums(is.na(endf_test))
+```
+<br />
+
+**build dataframes from all the previous created variables** 
+``` {r, eval = FALSE}
+endf1 = data.frame(endf, count = vec_train, NAs = isna)
+endf1_test = data.frame(endf_test, count = vec_test, NAs = isna_test)
+```
+<br />
+
+**limit the data-set to expected values less than 70** (remove outliers)
+``` {r, eval = FALSE}
+# TRAIN
+remv_outl = which(endf1$Expected < 70)         
+expected = endf1$Expected[remv_outl]
+ntrain = endf1[remv_outl, -which(colnames(endf1) %in% c("Id", "Expected"))]
+
+# TEST
+id_test = endf1_test$Id  ; head(id_test)
+ntest = endf1_test[, -which(colnames(endf1_test) == "Id")]
+head(ntest) ; dim(ntest)
+
+# validate that colnames of train-set equal those of the test-set
+table(colnames(ntrain) == colnames(ntest))
+```
+<br />
+
+####use xgboost to fit the data####
+<br />
+
+**customize the evaluation metric for xgboost**
+``` {r, eval = FALSE}
+library(Metrics)
+
+# In case of log-transformation
+eval_LOG_MAE <- function(preds, dtrain) {
+  labels <- getinfo(dtrain, "label")
+  preds = exp(preds) - 1
+  labels = exp(labels) - 1
+  err = mae(labels, preds)
+  return(list(metric = "MAE", value = err))
+}
+```
+<br />
+
+**model to fit and predict**
+
+* 4-fold cross-validation will be used
+* In each fold xgboost will be fitted 5 times with randomly chosen parameters from a specific range of values
+
+``` {r, eval = FALSE}
+# run algorithms
+
+start = Sys.time()
+
+library(caret)
+library(xgboost)
+
+REPEATS = 5
+
+out_ALL = list()
+
+
+sample_seed = sample(seq(1, 1000000, 1), 1)
+
+set.seed(sample_seed)
+folds = createFolds(log(expected + 1), k = 4, list = TRUE)
+
+
+for (i in 1:length(folds)) {
+  
+  cat('fold', i, '\n')
+  
+  TEST_lst = list()
+  PARAMS = list()
+
+  tr_er <- tes_er <- rep(NA, REPEATS)
+  pred_tr_lst <- pred_te_lst <- list()
+  
+  
+  for (j in 1:REPEATS) {
+    
+    cat('REPEAT', j, '\n')
+    
+    dtrain <- xgb.DMatrix(data = as.matrix(ntrain[unlist(folds[-i]), ]), label = log(expected + 1)[unlist(folds[-i])], missing = NA)
+    
+    dtest <- xgb.DMatrix(data = as.matrix(ntrain[unlist(folds[i]), ]), label = log(expected + 1)[unlist(folds[i])], missing = NA)
+    
+    watchlist <- list(train = dtrain, test = dtest)
+    
+    
+    param = list("objective" = "count:poisson", "booster" = "gbtree", "bst:eta" = sample(seq(0.065, 0.09, 0.005), 1), 
+                 "subsample" = sample(seq(0.65, 0.80, 0.01), 1), "max_depth" = sample(seq(8, 12, 1), 1), "colsample_bytree" = sample(seq(0.65, 0.85, 0.05), 1),
+                 "num_parallel_tree" = 1, "nthread" = 5, 'seed' = sample(seq(1, 100000, 1), 1), "lambda" = 1e-5, "alpha" = 1e-5)
+
+    num_round = 165
+    
+    fit = xgb.train(param, dtrain, nround = num_round, printEveryN = 20, watchlist = watchlist, early_stop_round = 10, verbose = 1, feval = eval_LOG_MAE, maximize = FALSE)
+    
+    PARAMS[[j]] = list(param = param, bst_round = fit$bestInd)
+
+    pred_tr = exp(predict(fit, xgb.DMatrix(as.matrix(ntrain[unlist(folds[-i]), ]), missing = NA), ntreelimit = fit$bestInd)) - 1
+    pred_tr_lst[[paste0('ens_', j)]] = pred_tr
+
+    pred_te = exp(predict(fit, xgb.DMatrix(as.matrix(ntrain[unlist(folds[i]), ]), missing = NA), ntreelimit = fit$bestInd)) - 1
+    pred_te_lst[[paste0('ens_', j)]] = pred_te
+    
+    tr_er[j] = mae(expected[unlist(folds[-i])], pred_tr)
+    tes_er[j] = mae(expected[unlist(folds[i])], pred_te)
+    
+    TEST_lst[[paste0('ens_', j)]] = exp(predict(fit, xgb.DMatrix(as.matrix(ntest), missing = NA), ntreelimit = fit$bestInd)) - 1
+    
+    cat('---------------------------------------------------------------------------', '\n')
+    
+    gc()
+  }
+  
+  out_ALL[[i]] = list(TEST_lst = TEST_lst, PARAMS = PARAMS, sample_seed = sample_seed, folds = folds, tr_er = tr_er, tes_er = tes_er, pred_tr_lst = pred_tr_lst, pred_te_lst = pred_te_lst)
+
+  cat('================================================================================================================', '\n')
+  
+  gc()
+}
+
+
+end = Sys.time()
+```
+
+<br />
+
+**get predictions for TEST-data**
+``` {r, eval = FALSE}
+preds_out = lapply(out_ALL, function(x) x$TEST_lst)
+
+pred_TEST = rowMeans(do.call(cbind, lapply(preds_out, function(x) do.call(cbind, x))))
+```
+
+<br />
+
+**get mean-error-rates for train-test for all folds and repeats**
+``` {r, eval = FALSE}
+train_error = unlist(lapply(out_ALL, function(x) x$tr_er))
+mean(train_error)
+test_error = unlist(lapply(out_ALL, function(x) x$tes_er))
+mean(test_error)
+```
+<br />
+
+**first rank predictions using the test-set then give higher weights to the best-first-two-ranked predictions**
+
+``` {r, eval = FALSE}
+vec = c(0.55, 0.45, 0.0, 0.0, 0.0)
+
+err_tes = lapply(out_ALL, function(x) x$tes_er)
+
+rank_test = lapply(err_tes, function(x) rank(x))
+
+out_rank = lapply(rank_test, function(x) vec[x])
+
+preds_TEST_rank = rowMeans(do.call(cbind, lapply(1:length(preds_out), function(x) rowSums(sweep(do.call(cbind, preds_out[[x]]), 2, out_rank[[x]], "*")))))
+```
+
+<br />
+
+**load sample solution and write predictions to file**
+
+``` {r, eval = FALSE}
+
+sample_solution <- read.csv("sample_solution.csv")
+
+sample_solution$Expected = preds_TEST_rank
+
+write.csv(sample_solution, "xgboost_4folds_5REPEATS_ITERS_165_early_stopping_WEIGHTED_RANK_TEST.csv", row.names=FALSE, quote = FALSE)
+```
