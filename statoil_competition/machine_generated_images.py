@@ -38,3 +38,5 @@ pd_df = pd.DataFrame()
 pd_df['true_images'] = idx_true_images
 
 pd_df.to_csv("../true_indices_test_data.csv", index=False)
+
+

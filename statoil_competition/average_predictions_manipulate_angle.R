@@ -20,14 +20,11 @@ dat_te = jsonlite::fromJSON(PATH)
 
 
 
-# indices of true images 
+# indices of true images  [ see the python file 'machine_generated_images.py' in the same folder ]
 #-----------------------
 
-# extract the true images index as explained in : https://www.kaggle.com/brassmonkey381/viewing-leak-and-machine-images 
-# however the number of true images should be 3425 and not 3412
 
-
-relevant_idx = read.csv("../indices_of_true_images.csv")
+relevant_idx = read.csv("../true_indices_test_data.csv")
 
 relevant_idx = as.vector(relevant_idx[, 1])                       # take the first column if one-column-matrix
 
